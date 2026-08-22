@@ -47,6 +47,8 @@ from proxy import (
     apply_auto_cache_control,
     has_cache_metadata,
     hide_reasoning_in_output,
+    merge_custom_tool_call_event,
+    emit_custom_tool_call_events,
 )
 
 
@@ -684,6 +686,159 @@ def exercise_codex_responses_passthrough() -> None:
         "codex chat route should merge system/developer messages for qwen-compatible upstreams",
     )
     assert_true(system_payload["messages"][1]["role"] == "user", "codex chat route should keep user messages after merged system")
+
+
+def exercise_codex_custom_tool_passthrough() -> None:
+    patch_input = "*** Begin Patch\n*** Add File: codex-write-test.txt\n+hello\n*** End Patch"
+    custom_call = {
+        "type": "custom_tool_call",
+        "id": "ctc_01",
+        "status": "completed",
+        "call_id": "call_01",
+        "name": "apply_patch",
+        "input": patch_input,
+    }
+    custom_output = {
+        "type": "custom_tool_call_output",
+        "id": "ctco_01",
+        "call_id": "call_01",
+        "output": "Success. Updated codex-write-test.txt",
+    }
+    body = {
+        "model": "gpt-5.6-sol",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Create codex-write-test.txt"}]},
+            custom_call,
+            custom_output,
+        ],
+        "stream": True,
+        "tools": [{
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+        }],
+    }
+    payload = responses_request_to_upstream(body, "fallback", "gpt-5.6-sol")
+    assert_true(payload["tools"] == body["tools"], "custom tool definition should pass through unchanged")
+    assert_true(payload["input"][1] == custom_call, "custom_tool_call history should pass through unchanged")
+    assert_true(payload["input"][2] == custom_output, "custom_tool_call_output history should preserve call_id and output")
+
+    events = [
+        ("response.output_item.added", {
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": dict(custom_call, status="in_progress", input=""),
+        }),
+        ("response.custom_tool_call_input.delta", {
+            "type": "response.custom_tool_call_input.delta",
+            "item_id": "ctc_01",
+            "output_index": 2,
+            "delta": patch_input,
+        }),
+        ("response.custom_tool_call_input.done", {
+            "type": "response.custom_tool_call_input.done",
+            "item_id": "ctc_01",
+            "output_index": 2,
+            "input": patch_input,
+        }),
+        ("response.output_item.done", {
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "item": custom_call,
+        }),
+    ]
+    expected_kinds = ["custom_tool_call_start", "custom_tool_call_delta", "custom_tool_call_input_done", "custom_tool_call_done"]
+    accumulated = []
+    for (event, event_payload), expected_kind in zip(events, expected_kinds):
+        kind, parsed = extract_text_delta(event, json.dumps(event_payload))
+        assert_true(kind == expected_kind and parsed is not None, f"{event} should be recognized")
+        assert_true(parsed["output_index"] == 2, f"{event} should preserve output_index")
+        assert_true(parsed["item_id"] == "ctc_01", f"{event} should preserve item_id")
+        if "item" in parsed:
+            assert_true(parsed["item"]["call_id"] == "call_01", f"{event} should preserve call_id")
+        merge_custom_tool_call_event(accumulated, kind, parsed)
+
+    emitted = []
+    completed_item = emit_custom_tool_call_events(lambda event, value: emitted.append((event, value)), accumulated[0])
+    assert_true(
+        [event for event, _ in emitted] == [
+            "response.output_item.added",
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
+            "response.output_item.done",
+        ],
+        "custom tool call should emit the standard Responses event sequence",
+    )
+    assert_true(completed_item == custom_call, "custom tool call should round-trip without changing IDs or input")
+    assert_true(all(value["output_index"] == 2 for _, value in emitted), "custom tool events should keep output_index stable")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeHandler:
+        def __init__(self) -> None:
+            self.events = []
+            self.close_connection = False
+
+    upstream_events = events + [("response.completed", {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_upstream",
+            "status": "completed",
+            "output": [custom_call],
+            "usage": {"input_tokens": 3, "output_tokens": 7, "total_tokens": 10},
+        },
+    })]
+    handler = FakeHandler()
+    model = ModelConfig(
+        name="GPT-5.6-Sol",
+        model_id="gpt-5.6-sol",
+        base_url="https://example.invalid/v1/responses",
+        api_key="key",
+        upstream_model="gpt-5.6-sol",
+        api_format="responses",
+    )
+    with (
+        patch("proxy.open_upstream", return_value=FakeResponse()),
+        patch("proxy.iter_sse_lines", return_value=[(event, json.dumps(value)) for event, value in upstream_events]),
+        patch("proxy.send_sse_headers"),
+        patch("proxy.write_sse", lambda _handler, event, value: handler.events.append((event, value))),
+        patch("proxy.write_data_sse", lambda _handler, value: handler.events.append(("data", value))),
+    ):
+        from proxy import ProxyHandler
+        ProxyHandler.handle_responses_streaming(handler, body, payload, "key", model.base_url, 30, model)
+
+    relayed_types = [event for event, _ in handler.events]
+    custom_start_index = relayed_types.index("response.output_item.added", 2)
+    assert_true(
+        relayed_types[custom_start_index:custom_start_index + 4] == [
+            "response.output_item.added",
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
+            "response.output_item.done",
+        ],
+        "Responses streaming handler should emit a complete custom tool sequence",
+    )
+    completed = next(value["response"] for event, value in handler.events if event == "response.completed")
+    assert_true(completed["output"] == [custom_call], "completed response should preserve the custom tool call")
+    assert_true("response.failed" not in relayed_types, "custom-only response must not be treated as empty")
+
+    chunked = []
+    for chunk in ("*** Begin Patch\n", "*** Add File: chunked.txt\n", "+same\n", "+same\n", "*** End Patch"):
+        merge_custom_tool_call_event(chunked, "custom_tool_call_delta", {
+            "item_id": "ctc_chunked",
+            "output_index": 0,
+            "delta": chunk,
+        })
+    assert_true(
+        chunked[0]["input"] == "*** Begin Patch\n*** Add File: chunked.txt\n+same\n+same\n*** End Patch",
+        "multiple freeform input deltas, including duplicates, should assemble without loss",
+    )
 
 
 def exercise_default_stream_config() -> None:
@@ -1703,6 +1858,7 @@ def main() -> int:
         exercise_pyqt_model_management_regressions()
         exercise_count_tokens_estimate()
         exercise_codex_responses_passthrough()
+        exercise_codex_custom_tool_passthrough()
         exercise_default_stream_config()
         exercise_codex_config_writer(tmpdir)
         exercise_backup_restore(tmpdir)

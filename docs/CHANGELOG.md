@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **P1**: Fixed Codex CLI 0.146.1 + GPT-5.6-Sol stopping before file edits because Responses `custom_tool_call` and `response.custom_tool_call_input.*` events were ignored. The proxy now preserves custom/freeform tool definitions and history, accumulates streamed freeform input, and emits the standard custom-tool sequence with stable `call_id`, `item_id`, and `output_index`, while leaving ordinary `function_call` handling unchanged.
+
+### Validation
+
+- Captured the exact Codex 0.146.1 freeform `apply_patch` request and follow-up `custom_tool_call_output` shape with an isolated local endpoint.
+- Added smoke coverage for custom tool request passthrough, event parsing, multi-delta assembly, response emission order, ID consistency, and the complete Responses streaming handler.
+- Verified an isolated Codex → modified proxy → synthetic Responses upstream flow that created a two-line file, modified it with a second patch, read it through the ordinary function-tool path, and completed the next turn.
+
 ## v4.8.8 (2026-07-16)
 
 GUI model config bugfix release.
@@ -695,4 +707,3 @@ Stable guided-setup release.
 - Moved advanced actions into a separate optional section.
 - Improved non-streaming and streaming upstream error reporting.
 - Updated the release zip with the latest Windows build.
-

@@ -2022,6 +2022,12 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
         return "reasoning", {"text": obj.get("text", "")}
     if event_type in ("response.output_item.added", "response.output_item.done"):
         item = obj.get("item") if isinstance(obj.get("item"), dict) else obj
+        if item.get("type") == "custom_tool_call":
+            return ("custom_tool_call_done" if event_type == "response.output_item.done" else "custom_tool_call_start"), {
+                "item_id": item.get("id") or "",
+                "output_index": obj.get("output_index", item.get("output_index", 0)),
+                "item": item,
+            }
         # WHY: response.output_item.done for message items contains the full
         # accumulated text. When incremental deltas were missed (e.g. upstream
         # skipped response.output_text.delta), this serves as a fallback to
@@ -2060,6 +2066,18 @@ def extract_text_delta(event: Optional[str], data: str) -> Tuple[str, Optional[D
             "name": obj.get("name", ""),
             "arguments": obj.get("arguments", "{}"),
             "replace_arguments": True,
+        }
+    if event_type == "response.custom_tool_call_input.delta":
+        return "custom_tool_call_delta", {
+            "item_id": obj.get("item_id") or "",
+            "output_index": obj.get("output_index", 0),
+            "delta": obj.get("delta", ""),
+        }
+    if event_type == "response.custom_tool_call_input.done":
+        return "custom_tool_call_input_done", {
+            "item_id": obj.get("item_id") or "",
+            "output_index": obj.get("output_index", 0),
+            "input": obj.get("input", ""),
         }
     if event_type == "response.completed":
         # response.completed contains the full accumulated output (text + tool calls)
@@ -2375,6 +2393,100 @@ def merge_tool_call_payloads(tool_calls: List[Dict[str, Any]], parsed: Optional[
                 merge_tool_call(tool_calls, payload)
         return
     merge_tool_call(tool_calls, parsed)
+
+
+def merge_custom_tool_call_event(custom_tool_calls: List[Dict[str, Any]], kind: str, parsed: Dict[str, Any]) -> None:
+    item = parsed.get("item") if isinstance(parsed.get("item"), dict) else {}
+    item_id = str(parsed.get("item_id") or item.get("id") or "")
+    call_id = str(item.get("call_id") or "")
+    target = next(
+        (
+            record for record in custom_tool_calls
+            if (item_id and record.get("item_id") == item_id)
+            or (call_id and record.get("call_id") == call_id)
+        ),
+        None,
+    )
+    if target is None:
+        target = {
+            "item_id": item_id,
+            "call_id": call_id,
+            "output_index": int(parsed.get("output_index", 0) or 0),
+            "name": str(item.get("name") or ""),
+            "input": "",
+            "deltas": [],
+            "item": dict(item),
+        }
+        custom_tool_calls.append(target)
+    elif item:
+        target["item"].update(item)
+    if item_id:
+        target["item_id"] = item_id
+    if call_id:
+        target["call_id"] = call_id
+    if item.get("name"):
+        target["name"] = str(item["name"])
+    target["output_index"] = int(parsed.get("output_index", target.get("output_index", 0)) or 0)
+    if kind == "custom_tool_call_delta":
+        delta = str(parsed.get("delta") or "")
+        if delta:
+            target["deltas"].append(delta)
+            # WHY: Custom-tool input deltas are opaque freeform bytes, not JSON
+            # snapshots. Repeated chunks may be intentional patch text.
+            target["input"] = str(target.get("input") or "") + delta
+    elif kind == "custom_tool_call_input_done":
+        target["input"] = str(parsed.get("input") or "")
+    elif item.get("input") is not None:
+        target["input"] = str(item.get("input") or "")
+    if kind == "custom_tool_call_done":
+        target["status"] = str(item.get("status") or "completed")
+
+
+def completed_custom_tool_call_item(custom_tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    item_id = str(custom_tool_call.get("item_id") or f"ctc_proxy_{now_ms()}_{uuid.uuid4().hex[:8]}")
+    item = dict(custom_tool_call.get("item") or {})
+    item.update({
+        "id": item_id,
+        "type": "custom_tool_call",
+        "status": str(custom_tool_call.get("status") or "completed"),
+        "call_id": str(custom_tool_call.get("call_id") or item_id),
+        "name": str(custom_tool_call.get("name") or ""),
+        "input": str(custom_tool_call.get("input") or ""),
+    })
+    return item
+
+
+def emit_custom_tool_call_events(emit_fn, custom_tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    item = completed_custom_tool_call_item(custom_tool_call)
+    output_index = int(custom_tool_call.get("output_index", 0) or 0)
+    # WHY: Codex's freeform apply_patch handler requires the standard custom-tool
+    # event sequence and stable item/call IDs; function-call argument events are
+    # a different protocol and are intentionally left unchanged.
+    emit_fn("response.output_item.added", {
+        "output_index": output_index,
+        "item": dict(item, status="in_progress", input=""),
+    })
+    deltas = custom_tool_call.get("deltas") if isinstance(custom_tool_call.get("deltas"), list) else []
+    if deltas:
+        for delta in deltas:
+            emit_fn("response.custom_tool_call_input.delta", {
+                "item_id": item["id"],
+                "output_index": output_index,
+                "delta": str(delta),
+            })
+    elif item["input"]:
+        emit_fn("response.custom_tool_call_input.delta", {
+            "item_id": item["id"],
+            "output_index": output_index,
+            "delta": item["input"],
+        })
+    emit_fn("response.custom_tool_call_input.done", {
+        "item_id": item["id"],
+        "output_index": output_index,
+        "input": item["input"],
+    })
+    emit_fn("response.output_item.done", {"output_index": output_index, "item": item})
+    return item
 
 
 def openai_tool_names(tools: Optional[List[Dict[str, Any]]]) -> List[str]:
@@ -3404,6 +3516,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         reasoning_parts: List[str] = []
         _reasoning_code_open = False  # WHY: Track if reasoning code block is open
         tool_calls: List[Dict[str, Any]] = []
+        custom_tool_calls: List[Dict[str, Any]] = []
         thinking_state: Dict[str, Any] = {"in_thinking": False}
         chat_stream_usage: Optional[Dict[str, Any]] = None
         done_payload: Optional[Dict[str, Any]] = None
@@ -3539,6 +3652,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             reasoning_parts.append(reasoning_text)
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
+                    elif kind.startswith("custom_tool_call_") and parsed:
+                        merge_custom_tool_call_event(custom_tool_calls, kind, parsed)
                     elif kind == "text_done" and parsed and parsed.get("text"):
                         # WHY: If no incremental deltas were received but the stream
                         # provides complete text via text_done, use it as a fallback.
@@ -3613,7 +3728,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if pseudo_tool_calls:
             for pseudo_tool_call in pseudo_tool_calls:
                 merge_tool_call_payloads(tool_calls, pseudo_tool_call)
-        if not output_text and not tool_calls:
+        if not output_text and not tool_calls and not custom_tool_calls:
             # WHY: Check for upstream error in done_payload and retry response
             # before falling back to a generic error message.
             codex_upstream_error = codex_upstream_error or ""
@@ -3674,7 +3789,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 log(f"codex stream retry http error model={model_config.model_id} {retry_msg}")
             except Exception as exc:
                 log(f"codex empty stream fallback failed model={model_config.model_id} error={exc}")
-        if not output_text and not tool_calls:
+        if not output_text and not tool_calls and not custom_tool_calls:
             error_msg = codex_upstream_error or "Upstream completed without assistant text or tool calls"
             emit("response.failed", {"response": {"id": request_id, "status": "failed", "error": {"type": "api_error", "message": error_msg}}})
             write_data_sse(self, "[DONE]")
@@ -3714,6 +3829,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             emit("response.function_call_arguments.done", {"item_id": item["id"], "output_index": output_index, "arguments": item["arguments"]})
             emit("response.output_item.done", {"output_index": output_index, "item": item})
             output.append(item)
+        for custom_tool_call in custom_tool_calls:
+            item = emit_custom_tool_call_events(emit, custom_tool_call)
+            output.append(item)
         # WHY: Inject a reasoning item when client requested thinking but upstream
         # didn't return one. This enables Claude Code auto mode (Bug #2).
         # Use reasoning with placeholder text instead of redacted_thinking.
@@ -3731,7 +3849,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             completed["usage"] = done_payload["response"].get("usage") or completed["usage"]
         elif chat_stream_usage:
             completed["usage"] = responses_usage_from_chat_usage(chat_stream_usage, completed["usage"]["input_tokens"], output_text)
-        log(f"codex response done model={model_config.model_id} chars={len(output_text)} tools={len(tool_calls)}{usage_cache_debug(completed.get('usage'))}")
+        log(f"codex response done model={model_config.model_id} chars={len(output_text)} tools={len(tool_calls)} custom_tools={len(custom_tool_calls)}{usage_cache_debug(completed.get('usage'))}")
         emit("response.completed", {"response": completed})
         write_data_sse(self, "[DONE]")
         self.close_connection = True
@@ -3834,6 +3952,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         reasoning_item_started = False
         reasoning_item_id = ""
         tool_calls: List[Dict[str, Any]] = []
+        custom_tool_calls: List[Dict[str, Any]] = []
         done_payload: Optional[Dict[str, Any]] = None
         thinking_state: Dict[str, Any] = {"in_thinking": False}
         chat_stream_usage: Optional[Dict[str, Any]] = None
@@ -3847,6 +3966,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             text_parts.append(text)
                     elif kind in ("tool_call", "tool_call_delta", "tool_calls", "tool_calls_delta") and parsed:
                         merge_tool_call_payloads(tool_calls, parsed)
+                    elif kind.startswith("custom_tool_call_") and parsed:
+                        merge_custom_tool_call_event(custom_tool_calls, kind, parsed)
                     elif kind == "error":
                         send_json(self, 502, responses_error_payload(json.dumps(parsed, ensure_ascii=False)))
                         return
@@ -3885,6 +4006,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             output.append({"id": response_output_item_id(), "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": output_text}]})
         for offset, tool_call in enumerate(tool_calls):
             output.append(codex_function_call_item(tool_call, offset))
+        for custom_tool_call in custom_tool_calls:
+            output.append(completed_custom_tool_call_item(custom_tool_call))
         # DISABLED: redacted_thinking causes garbled output; reasoning now in code block
         # if thinking_requested(body):
         #     output = inject_redacted_thinking_to_responses_output(output)

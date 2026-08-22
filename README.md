@@ -19,6 +19,8 @@
 
 本地代理运行在 `http://127.0.0.1:8082`，在客户端协议和上游模型格式之间自动转换。
 
+Responses 直连同时支持 JSON Schema function tools 和 custom/freeform tools（包括 Codex 的 `apply_patch`），并保留多轮工具调用的 `call_id`。
+
 ## 截图
 
 <img width="1536" height="1024" alt="GUI" src="https://github.com/user-attachments/assets/97a87f8a-a5ee-40fd-937c-d721abf662a1" />

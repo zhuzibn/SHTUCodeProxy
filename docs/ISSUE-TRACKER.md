@@ -324,6 +324,23 @@
 | **开发记录** | `docs/dev-notes/2026-07-16-model-url-revert-on-apply.md` |
 | **回归测试** | `tests/test_model_url_revert.py`：撤修复 3 场景全 FAIL，加修复全 PASS |
 
+### #017 — Codex GPT-5.6-Sol freeform apply_patch 调用中断
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | Codex GPT-5.6-Sol freeform `apply_patch` 调用未完成，文件编辑停在执行前 |
+| **状态** | 🟢 已修复 |
+| **优先级** | P1 |
+| **发现日期** | 2026-08-22 |
+| **修复日期** | 2026-08-22 |
+| **发现人** | 用户反馈 |
+| **影响范围** | Codex CLI 0.146.1 + GPT-5.6-Sol + `/v1/responses`；使用 freeform `apply_patch` 创建或修改文件 |
+| **现象** | 文本、shell、读取及 Git 查询可执行，但模型准备编辑文件后停止；代理仅识别 `function_call` / `response.function_call_arguments.*`，未识别 Responses custom/freeform 工具事件 |
+| **根因** | Responses 直连请求虽原样保留 `{type:"custom"}` 工具定义及 custom tool 历史，但流式解析器只收集 `function_call` 和 `response.function_call_arguments.*`；上游返回的 `custom_tool_call`、`response.custom_tool_call_input.delta/done` 被忽略，最终 `response.completed` 也不含该调用，Codex 因而无法执行 `apply_patch`。 |
+| **修复提交** | 未提交（按用户要求） |
+| **开发记录** | docs/dev-notes/2026-08-22-codex-custom-tool-compatibility.md |
+| **回归测试** | targeted custom-tool regression PASS；模块导入/py_compile PASS；非 GUI smoke PASS；Codex 0.146.1 + 校园 GPT-5.6-Sol 经 8098 测试代理完成多行创建、二次修改、shell 读回与后续对话。其余模型无可用 key；完整 GUI smoke 因现有环境缺少 PyQt5 未运行。 |
+
 
 ---
 
@@ -332,8 +349,9 @@
 | 优先级 | 🔴 待处理 | 🟡 排查中 | 🔵 修复中 | 🟢 已修复 | ⚪ 已关闭 |
 |--------|-----------|-----------|-----------|-----------|-----------|
 | P0     | 0         | 0         | 0         | 1         | 0         |
-| P1     | 0         | 0         | 0         | 10        | 0         |
-| P2     | 0         | 0         | 0         | 3         | 0         |
-| **合计** | **0**     | **0**     | **0**     | **15**    | **0**     |
+| P1     | 0         | 0         | 0         | 11        | 0         |
+| P2     | 0         | 0         | 0         | 4         | 0         |
+| P3     | 0         | 0         | 0         | 2         | 0         |
+| **合计** | **0**     | **0**     | **0**     | **18**    | **0**     |
 
-> 最后更新: 2026-07-16（#016 模型 URL 回退修复）
+> 最后更新: 2026-08-22（#017 Codex custom/freeform 工具已修复）
