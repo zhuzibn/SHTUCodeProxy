@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **P2**: Added a README walkthrough for configuring GPT-5.6, DeepSeek Chat, and GLM Chat together, including their model IDs, upstream formats, GUI save flow, and per-session Codex model selection.
+
 ### Fixed
 
 - **P1**: Fixed Codex CLI 0.146.1 + GPT-5.6-Sol stopping before file edits because Responses `custom_tool_call` and `response.custom_tool_call_input.*` events were ignored. The proxy now preserves custom/freeform tool definitions and history, accumulates streamed freeform input, and emits the standard custom-tool sequence with stable `call_id`, `item_id`, and `output_index`, while leaving ordinary `function_call` handling unchanged.

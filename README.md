@@ -94,6 +94,33 @@ GUI 底部栏提供 **检查更新** 按钮，检测到新版本后一键下载�
 
 切换模型：`./shtucodeproxyctl use-model MODEL_ID`
 
+### 同时配置 GPT-5.6、DeepSeek Chat 和 GLM Chat
+
+在 GUI 的模型配置页面分别添加或编辑以下三个模型，并为每个模型填写对应的 API Key：
+
+| Display Name | Model ID for Claude Code | Upstream Model | API Format | Base URL |
+|--------------|--------------------------|----------------|------------|----------|
+| GPT-5.6 | `GPT-5.6` | `gpt-5.6-sol` | `responses` | `https://genaiapi.shanghaitech.edu.cn/api/v1/response` |
+| DeepSeek Chat | `deepseek-chat` | `deepseek-chat` | `chat_completions` | `https://genaiapi.shanghaitech.edu.cn/api/v1/start` |
+| GLM Chat | `glm-chat` | `glm-chat` | `chat_completions` | `https://genaiapi.shanghaitech.edu.cn/api/v1/start` |
+
+配置完成后：
+
+1. 点击 **Apply Model Changes**，再点击 **Save Config** 保存代理配置。
+2. 将 Codex Model 设为默认使用的模型（例如 `GPT-5.6`）。
+3. 点击 **Write Client Config**，写入 Codex 的 `config.toml` 和 `auth.json`。
+4. 如果代理尚未运行，点击 **Start Proxy**；如果代理已经为其他模型运行，则无需再次启动，同一个代理会根据请求中的 Model ID 自动路由。
+
+启动新的 Codex 会话时，可通过 `-m` 临时选择模型：
+
+```powershell
+codex-uni -m GPT-5.6
+codex-uni -m deepseek-chat
+codex-uni -m glm-chat
+```
+
+上述三个模型共用本地代理 `http://127.0.0.1:8082`，但各自使用独立的上游模型配置和 API Key。修改模型配置后请依次点击 **Apply Model Changes** 和 **Save Config**；已打开的 Codex 会话不会自动切换模型，需要启动新会话。
+
 ## 源码运行
 
 ```powershell
