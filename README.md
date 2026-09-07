@@ -137,6 +137,27 @@ python cli.py serve    # 仅代理（无 GUI）
 
 ## 常见问题
 
+### 使用 `codex-uni` 恢复普通 Codex 会话
+
+Codex CLI 0.153.4 的 `resume --all` 仍会按当前 model provider 过滤会话。因此，`codex-uni resume --all` 可能不显示由普通 `codex` 创建的会话。可按以下步骤跨 provider 恢复：
+
+1. 运行 `codex resume --all`，选择并打开目标会话。
+2. 在该会话中输入 `/status`。
+3. 复制显示的 session ID，然后退出该会话。
+4. 使用该 ID 从校园 provider 恢复会话：
+
+```bash
+codex-uni resume <SESSION_ID>
+```
+
+示例：
+
+```bash
+codex-uni resume 01a071cd-aed4-7b61-a12b-7886bc68f0e9
+```
+
+直接指定 session ID 会绕过 resume picker 的 provider 过滤。详细配置及旧校园会话的访问方法参见 [Codex 共享历史与 ShanghaiTech API Key 刷新指南](docs/dev-notes/2026-09-05-codex-shared-history-setup.md)。
+
 | 问题 | 解决方案 |
 |------|----------|
 | `ConnectionRefused` | 确认代理已启动（GUI 中点击 Start Proxy） |
@@ -144,6 +165,8 @@ python cli.py serve    # 仅代理（无 GUI）
 | 模型不存在 | 检查 model ID、API Key、上游模型是否有效 |
 | 自动更新报 `Failed to load Python DLL` | Windows Defender 拦截了 onefile exe 的 DLL 解压，请手动下载 zip 包安装 |
 | Claude Code 输出乱码 | 升级到 v4.7.8+ 已修复 reasoning 代码块格式问题 |
+| `codex-uni resume --all` 看不到普通 `codex` 会话 | 按上方步骤从 `/status` 获取 session ID，再运行 `codex-uni resume <SESSION_ID>` |
+| `codex` 与 `codex-uni` 使用不同历史目录，或更新 API Key 后出现 401/403 | 参见 [Codex 共享历史与 ShanghaiTech API Key 刷新指南](docs/dev-notes/2026-09-05-codex-shared-history-setup.md) |
 
 ## Credits
 
