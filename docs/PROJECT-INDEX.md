@@ -1,6 +1,6 @@
 ﻿# SHTUCodeProxy 项目目录索引
 
-> 最后更新: 2026-05-25 (v4.3.3)
+> 最后更新: 2026-09-05
 > 本文档记录项目中每个文件和目录的职责，防止迭代开发时因目录变更导致问题。
 
 ## 根目录结构
@@ -73,6 +73,7 @@ app.py
 | `CONTRIBUTING.md` | 贡献指南 |
 | `LICENSE` | 开源许可 |
 | `SECURITY.md` | 安全策略 |
+| `dev-notes/2026-09-05-codex-shared-history-setup.md` | Codex 与 `codex-uni` 共享历史、隔离认证及校园 API Key 刷新指南 |
 
 ### `tests/` — 测试
 

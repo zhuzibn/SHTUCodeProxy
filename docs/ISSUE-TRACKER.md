@@ -341,6 +341,56 @@
 | **开发记录** | docs/dev-notes/2026-08-22-codex-custom-tool-compatibility.md |
 | **回归测试** | targeted custom-tool regression PASS；模块导入/py_compile PASS；非 GUI smoke PASS；Codex 0.146.1 + 校园 GPT-5.6-Sol 经 8098 测试代理完成多行创建、二次修改、shell 读回与后续对话。其余模型无可用 key；完整 GUI smoke 因现有环境缺少 PyQt5 未运行。 |
 
+### #018 — Codex writer 与 0.134+ 外部 profile 及共享历史配置不兼容
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | Codex writer 与 0.134+ 外部 profile 及共享历史配置不兼容 |
+| **状态** | 🟡 排查中 |
+| **优先级** | P2 |
+| **发现日期** | 2026-09-05 |
+| **修复日期** | |
+| **发现人** | 用户配置排查 |
+| **影响范围** | Codex CLI 0.134.0+；同时使用正常 Codex OAuth、SHTUCodeProxy API Key 和共享会话历史的用户 |
+| **现象** | 将 GUI 的 Codex config 路径指向 `$CODEX_HOME/shtu_proxy.config.toml` 后，点击 Write Client Config 会覆盖外部 profile，重新写入 `requires_openai_auth = true` 和不再由 `--profile` 读取的 `[profiles.shtu_proxy]`。若 auth 路径同时指向共享 `$CODEX_HOME/auth.json`，正常 OAuth 登录也会被 API-key 模式覆盖。 |
+| **根因** | `src/cli.py` 的 `codex_provider_profile_block()`、`validate_codex_config()` 与对应 smoke 仍强制旧式同文件 provider/profile 和 `auth.json` 认证设计，尚未支持 Codex 0.134+ 的独立 `<name>.config.toml` profile 及 provider `env_key`。 |
+| **修复提交** | 待处理；当前使用 `.codex_shanghaitech` staging config/auth + 手工维护 WSL external profile 的规避方案 |
+| **开发记录** | `docs/dev-notes/2026-09-05-codex-shared-history-setup.md` |
+| **回归测试** | 源码与 `tests/smoke_test.py` 审查确认当前 writer 明确拒绝 `env_key` 并要求 inline profile；文档已记录不会覆盖共享 profile 的 staging-path 流程。2026-09-05 使用 Codex CLI 0.153.4 实测 `codex-uni` 和 `codex-uni-old` 均通过 GPT-5.6-Sol 返回指定文本。 |
+
+### #019 — Codex 共享 profile 刷新模型目录时报 schema 警告
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | Codex 共享 profile 刷新模型目录时报 `missing field models` |
+| **状态** | 🟡 排查中 |
+| **优先级** | P2 |
+| **发现日期** | 2026-09-05 |
+| **修复日期** | |
+| **发现人** | 用户反馈 |
+| **影响范围** | Codex CLI 0.153.4 + `codex-uni` external profile + SHTUCodeProxy `/v1/models` |
+| **现象** | `codex-uni` 启动请求时记录 `failed to decode models response: missing field models`；同一请求随后仍能通过 GPT-5.6-Sol 正常返回内容。`codex-uni-old` 未显示该警告。 |
+| **根因** | 共享 Codex home 存在 `models_cache.json`，Codex 尝试从 custom provider 刷新模型目录；SHTUCodeProxy 返回 OpenAI-compatible `{object, data}` 模型列表，而 Codex 的内部目录解析器期待顶层 `models` 字段。 |
+| **修复提交** | 待处理；当前警告为非致命，未修改运行时配置或代理代码 |
+| **开发记录** | `docs/dev-notes/2026-09-05-codex-shared-history-setup.md` |
+| **回归测试** | `codex-uni exec --skip-git-repo-check` 返回 `PROFILE_OK`；`codex-uni-old` 返回 `OLD_OK`；两者均使用 GPT-5.6-Sol 和同一 8082 代理。API-key bridge 与 staging `auth.json` 的 key 长度及 SHA-256 摘要一致，全程未输出密钥。 |
+
+### #020 — Codex resume picker 按 model provider 隐藏共享历史
+
+| 字段 | 值 |
+|------|-----|
+| **标题** | `codex-uni resume --all` 不显示普通 `codex` 会话 |
+| **状态** | 🔵 修复中 |
+| **优先级** | P2 |
+| **发现日期** | 2026-09-05 |
+| **修复日期** | |
+| **发现人** | 用户反馈 |
+| **影响范围** | Codex CLI 0.153.4；同一 `CODEX_HOME` 中同时存在 `openai` 与自定义 `shtu_proxy` provider 会话的用户 |
+| **现象** | `codex resume --all` 能看到普通 Codex 会话，但 `codex-uni resume --all` 只列出校园 provider 会话；`--all` 未跨 provider 展示全部共享会话。 |
+| **根因** | 两个启动器已共享 `/home/zhuzibn/.codex`，但 Codex resume picker 除 cwd/source 条件外还按当前 `model_provider` 查询线程；`--all` 仅关闭 cwd 过滤，不关闭 provider 过滤。 |
+| **修复提交** | 待上游支持跨 provider picker；当前使用 `codex-uni resume <SESSION_ID>` 直接恢复普通 Codex 会话 |
+| **开发记录** | `docs/dev-notes/2026-09-05-codex-shared-history-setup.md` |
+| **回归测试** | 本地 state DB 含 211 个 `openai` CLI 线程及 2 个 `shtu_proxy` CLI 线程；在隔离的 `/tmp` 副本中，`codex --profile shtu_proxy resume 01a071cd-aed4-7b61-a12b-7886bc68f0e9` 成功载入 `openai` provider 会话并进入工作目录选择界面，证明会话数据可跨 provider 按 UUID 恢复；README 已记录通过 `/status` 获取 ID 的完整步骤。 |
 
 ---
 
@@ -350,8 +400,8 @@
 |--------|-----------|-----------|-----------|-----------|-----------|
 | P0     | 0         | 0         | 0         | 1         | 0         |
 | P1     | 0         | 0         | 0         | 11        | 0         |
-| P2     | 0         | 0         | 0         | 4         | 0         |
+| P2     | 0         | 2         | 1         | 4         | 0         |
 | P3     | 0         | 0         | 0         | 2         | 0         |
-| **合计** | **0**     | **0**     | **0**     | **18**    | **0**     |
+| **合计** | **0**     | **2**     | **1**     | **18**    | **0**     |
 
-> 最后更新: 2026-08-22（#017 Codex custom/freeform 工具已修复）
+> 最后更新: 2026-09-05（#020 Codex resume picker provider 过滤已登记并排查）

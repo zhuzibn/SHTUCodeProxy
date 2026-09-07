@@ -4,6 +4,7 @@
 
 ### Documentation
 
+- **P2**: Added a durable Codex shared-history setup and API-key refresh guide covering safe GUI staging paths, the external profile format, credential isolation, Bash launchers, validation, troubleshooting, and rollback; documented the current writer limitation plus Codex 0.153.4's provider-filtered resume picker and direct-session-ID workaround.
 - **P2**: Added a README walkthrough for configuring GPT-5.6, DeepSeek Chat, and GLM Chat together, including their model IDs, upstream formats, GUI save flow, and per-session Codex model selection.
 
 ### Fixed
